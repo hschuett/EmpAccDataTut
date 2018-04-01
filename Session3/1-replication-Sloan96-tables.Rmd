@@ -1,0 +1,418 @@
+---
+title: "Replication of Sloan 1996 II - Main Results"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+---
+
+*(C) Harm Schuett 2018, schuett@bwl.lmu.de, see LICENSE file for details*
+
+The purpose of this notebook is to replicate the sample of the famous accrual anomaly paper by Richard Sloan ["Do Stock Prices Fully Reflect Information in Accruals and Cash Flows about Future Earnings?"](https://www.jstor.org/stable/248290?seq=1#page_scan_tab_contents) using R. First things first, what's the paper about again?
+
+```{r}
+library(dplyr)        # data wrangling
+library(knitr)        # for html tables
+library(kableExtra)   # for nicer html table styling
+library(tibble)       # for tibble dataframes functions
+library(purrr)        # for map functions
+library(broom)        # handling lists of regression results
+library(tidyr)        # working with nested dataframes
+```
+
+&nbsp;
+
+## Load Sample
+
+```{r}
+df_sample <- readRDS("../out/data/sloan-sample.rds")
+glimpse(df_sample)
+```
+
+&nbsp;
+
+## Table 1: Descriptives
+
+```{r}
+tab1.1 <- df_sample %>% 
+  select(AccRank, Earn, Acc, CF, Size, Beta, CA, CL, Dep) %>% 
+  group_by(AccRank) %>%
+  summarise_all(mean)%>% 
+  select(-AccRank) %>% 
+  as.data.frame() %>% t() %>% as.data.frame() %>%
+  rownames_to_column() %>% 
+  mutate(Stat = "Mean",
+         rowNumber = row_number())
+tab1.2 <- df_sample %>% 
+  select(AccRank, Earn, Acc, CF, Size, Beta, CA, CL, Dep) %>% 
+  group_by(AccRank) %>%
+  summarise_all(median)%>% 
+  select(-AccRank) %>% 
+  as.data.frame() %>% t() %>% as.data.frame() %>%
+  rownames_to_column() %>% 
+  mutate(Stat = "Median",
+         rowNumber = row_number())
+
+tab1 <- rbind(tab1.1, tab1.2) %>% 
+  select(rowname, rowNumber, Stat, V1:V10) %>% 
+  arrange(rowNumber, Stat) %>% 
+  select(-rowNumber)
+colnames(tab1) <- c("", "",  "Low", "2", "3", "4", "5", "6", "7", "8", "9", "High")
+rm(tab1.1, tab1.2)
+tab1
+```
+
+pretty version:
+
+```{r}
+kable(tab1, format="html", digits=2,
+      caption = "Averages by Accrual Rank") %>%
+  kable_styling(bootstrap_options="striped", full_width=F) %>% 
+  group_rows("Panel A", 1, 6) %>% 
+  group_rows("Panel B", 7, 10) %>% 
+  group_rows("Panel C", 11, 16) %>% 
+  column_spec(1, bold = T) %>% 
+  column_spec(2, border_right = T) %>% 
+  collapse_rows(columns = 1)
+```
+
+&nbsp;
+
+## Table 2 and Table 3: Persistence Regressions
+
+To construct table 2, we first need to run a couple of regressions. Pooled regressions, Sic2 industry regressions, pooled decile regressions, Sic2 industry decile regressions. We'll run all of those first, collect results and construct table 2 and 3 from it.
+creating deciles
+
+### Creating deciles
+
+```{r}
+df_sample2 <- df_sample %>% 
+  group_by(fyear) %>% 
+  mutate(DecEarn = ntile(Earn, 10),
+         DecAcc = ntile(Acc, 10),
+         DecRetExSize = ntile(RetExSize, 10),
+         DecLeadEarn = ntile(LeadEarn, 10),
+         DecCF = ntile(CF, 10)) %>% 
+  ungroup() %>% 
+  mutate(sic2 = substr(sic, 1, 2))
+```
+
+### Running Regressions
+
+```{r}
+compute_sic_regs <- function(data, form) {
+  model <- lm(formula=form, data=data)
+  # broom's tidy to get a df representation of results
+  return(tidy(model))
+}
+
+# Pooled regressions
+modl_earn.1 <- lm(LeadEarn ~ Earn, data=df_sample2)
+modl_accr.1 <- lm(LeadEarn ~ Acc + CF, data=df_sample2)
+# Pooled decile regressions
+modl_earn.2 <- lm(DecLeadEarn ~ DecEarn, data=df_sample2)
+modl_accr.2 <- lm(DecLeadEarn ~ DecAcc + DecCF, data=df_sample2)
+# industry level regressions
+df_sic_sample <- df_sample2 %>% 
+  nest(-sic2)
+df_sic_sample$modl_e1 <- map(df_sic_sample$data,
+                            compute_sic_regs, form=LeadEarn ~ Earn)
+df_sic_sample$modl_eD <- map(df_sic_sample$data,
+                            compute_sic_regs, form=DecLeadEarn ~ DecEarn)
+df_sic_sample$modl_a1 <- map(df_sic_sample$data,
+                            compute_sic_regs, form=LeadEarn ~ Acc + CF)
+df_sic_sample$modl_aD <- map(df_sic_sample$data,
+                            compute_sic_regs, form=DecLeadEarn ~ DecAcc + DecCF)
+head(df_sic_sample)
+```
+
+### Table 2
+
+```{r}
+reg_output <- c("term", "estimate", "statistic")
+tab2.1 <- tidy(modl_earn.1) %>% select(reg_output) %>% 
+  gather(key=stat, value="value", -term)
+tab2.2 <- df_sic_sample %>% 
+  unnest(modl_e1) %>% 
+  select(reg_output) %>% 
+  group_by(term) %>% 
+  summarize(Mean = mean(estimate),
+            Q1 = quantile(estimate, prob=0.25),
+            Median = median(estimate),
+            Q3 = quantile(estimate, prob=0.75)) %>% 
+  mutate(stat = "estimate")
+tab2.3 <- tidy(modl_earn.2) %>% select(reg_output) %>% 
+  gather(key=stat, value="value", -term)
+tab2.4 <- df_sic_sample %>% 
+  unnest(modl_eD) %>% 
+  select(reg_output) %>% 
+  group_by(term) %>% 
+  summarize(Mean = mean(estimate),
+            Q1 = quantile(estimate, prob=0.25),
+            Median = median(estimate),
+            Q3 = quantile(estimate, prob=0.75)) %>% 
+  mutate(stat = "estimate")
+tab2 <- rbind(
+  tab2.1 %>% 
+    left_join(tab2.2, by=c("term", "stat")) %>% 
+    arrange(term, stat),
+  tab2.3 %>% 
+    left_join(tab2.4, by=c("term", "stat")) %>% 
+    arrange(term, stat)
+  )
+rm(tab2.1, tab2.2, tab2.3, tab2.4)
+```
+
+```{r}
+kable(tab2, format="html", digits=2,
+      caption = "Results from Ordinary Least Squares Regressions of Future Earnings Performance on Current Earnings Performance") %>%
+  kable_styling(bootstrap_options="striped", full_width=F) %>% 
+  group_rows("Panel A: Regressions using actual values", 1, 4) %>% 
+  group_rows("Panel B: Regressions using decile rankings", 5, 8) %>% 
+  column_spec(1, bold = T, border_right = T) %>% 
+  collapse_rows(columns = 1) %>% 
+  add_header_above(c(" "=2, "Pooled"=1, "Industry Level"=4)) 
+```
+
+### Table 3
+
+```{r}
+reg_output <- c("term", "estimate", "statistic")
+tab3.1 <- tidy(modl_accr.1) %>% select(reg_output) %>% 
+  gather(key=stat, value="value", -term)
+tab3.2 <- df_sic_sample %>% 
+  unnest(modl_a1) %>% 
+  select(reg_output) %>% 
+  group_by(term) %>% 
+  summarize(Mean = mean(estimate),
+            Q1 = quantile(estimate, prob=0.25),
+            Median = median(estimate),
+            Q3 = quantile(estimate, prob=0.75)) %>% 
+  mutate(stat = "estimate")
+tab3.3 <- tidy(modl_accr.2) %>% select(reg_output) %>% 
+  gather(key=stat, value="value", -term)
+tab3.4 <- df_sic_sample %>% 
+  unnest(modl_aD) %>% 
+  select(reg_output) %>% 
+  group_by(term) %>% 
+  summarize(Mean = mean(estimate),
+            Q1 = quantile(estimate, prob=0.25),
+            Median = median(estimate),
+            Q3 = quantile(estimate, prob=0.75)) %>% 
+  mutate(stat = "estimate")
+tab3 <- rbind(
+  tab3.1 %>% 
+    left_join(tab3.2, by=c("term", "stat")) %>% 
+    arrange(term, stat),
+  tab3.3 %>% 
+    left_join(tab3.4, by=c("term", "stat")) %>% 
+    arrange(term, stat)
+  )
+rm(tab3.1, tab3.2, tab3.3, tab3.4)
+```
+
+```{r}
+kable(tab3, format="html", digits=2,
+      caption = "Results from Ordinary Least Squares Regressions of Future Earnings Performance on the Accrual and Cash Flow Components of Current Earnings Performance") %>%
+  kable_styling(bootstrap_options="striped", full_width=F) %>% 
+  group_rows("Panel A: Regressions using actual values", 1, 6) %>% 
+  group_rows("Panel B: Regressions using decile rankings", 7, 12) %>% 
+  column_spec(1, bold = T, border_right = T) %>% 
+  collapse_rows(columns = 1) %>% 
+  add_header_above(c(" "=2, "Pooled"=1, "Industry Level"=4)) 
+```
+
+&nbsp;
+
+## Table 4 and Table 5: The Mishkin test 
+
+What comes now is a well-known test in accounting research. The Mishkin test. Derived by a macroeconomist, the idea is to test whether the market correctly prices a model. 
+
+In our case, the idea is to check whether the market uses the "correct" persistence parameters. The test works on the premise that in an efficient market, the only things that can spark abnormal returns are **unexpected changes** in a value relevant variable. In our case the value relevant variable is earnings. 
+
+\begin{align}
+  Earn_{t+1} &= \alpha_0 + \alpha_1Earn_t + v_{t+1}\\
+  (r_{t+1}-\rho_{t+1}|\phi_t) & = \beta\left(Earn_{t+1} - \alpha_0 - \alpha_1^*Earn_t\right) + \epsilon_{t+1}
+\end{align}
+
+And in the case of decomposed earnings: 
+
+\begin{align}
+  Earn_{t+1} &= \gamma_0 + \gamma_1Accr_t + \gamma_2CF_t + v_{t+1}\\
+  (r_{t+1}-\rho_{t+1}|\phi_t) & = \beta\left(Earn_{t+1} - \gamma_0 -  \gamma_1^*Accr_t - \gamma^*_2CF_t\right) + \epsilon_{t+1}
+\end{align}
+
+The first line in both equation systems is the "correct" expectation that everyone *should* have. The second line is what is priced. What we want to check is whether $\alpha_1 = \alpha_1^*$.
+
+In order to test this, we have to estimate these two systems via non-linear seemingly unrelated least squares. That is quite a bit more involved as most of the regressions, you normally do (you have to compute a likelihood and maxmimize it). But then again it is a perfect test case for Maximum likelihood estimation.
+
+*Note: We will skip the decile rank results. For time reaosons*
+
+```{r}
+df_sample3 <- df_sample2 %>% 
+  filter(complete.cases(LeadEarn, Earn, Acc,RetExSize, CF)) %>% 
+  select(LeadEarn, Earn, Acc,RetExSize, CF)
+```
+
+### Table 4
+
+```{r}
+loglikenorm1<-function(p, data)
+{
+  a0 <- p[1]
+  a1 <- p[2]
+  beta <- p[3]
+  a0star <- p[4]
+  a1star <- p[5]
+  const <- rep(1, dim(data)[1])
+  sig1 <- p[6]
+  sig2 <- p[7]
+  resid1 = data$LeadEarn - a0*const - a1*data$Earn
+  resid2 = data$RetExSize - beta*(data$LeadEarn - a0star*const - a1star*data$Earn)
+  loglike_mod1 <- sum(-log(sig1*sqrt(2*pi))- (1/(2*sig1^2))*(resid1)^2)
+  loglike_mod2 <- sum(-log(sig2*sqrt(2*pi))- (1/(2*sig2^2))*(resid2)^2)
+  # note use of sum
+  loglike<- -loglike_mod1 - loglike_mod2 
+  return(loglike)
+}
+loglikenorm2 <- function(p, data)
+{
+  a0 <- p[1]
+  a1 <- p[2]
+  beta <- p[3]
+  a0star <- p[4]
+  const <- rep(1, dim(data)[1])
+  sig1 <- p[5]
+  sig2 <- p[6]
+  resid1 = data$LeadEarn - a0*const - a1*data$Earn
+  resid2 = data$RetExSize - beta*(data$LeadEarn - a0star*const - a1*data$Earn)
+  loglike_mod1 <- sum(-log(sig1*sqrt(2*pi))- (1/(2*sig1^2))*(resid1)^2)
+  loglike_mod2 <- sum(-log(sig2*sqrt(2*pi))- (1/(2*sig2^2))*(resid2)^2)
+  # note use of sum
+  loglike<- -loglike_mod1 - loglike_mod2 
+  return(loglike)
+}
+
+oldw <- getOption("warn")
+options(warn = -1)
+fit_mishk_eU <- nlm(loglikenorm1,
+                    p=c(0, 1, 0, 0, 1, 1, 1), 
+                    data=df_sample3, hessian=TRUE)
+fit_mishk_eC <- nlm(loglikenorm2,
+                    p=c(0, 1, 0, 0, 1, 1), 
+                    data=df_sample3, hessian=TRUE)
+options(warn = oldw)
+
+# Computing likelihood ratio test
+# The number of df is the number of parameters that differ 
+# between the two nested models
+parm <- c("a0", "a1", "beta", "a0*", "a1*")
+chi_statistic <- rep(NA, length(parm))
+chi_statistic[1] <- fit_mishk_eC$minimum - fit_mishk_eU$minimum
+p_value <- rep(NA, length(parm))
+p_value[1] = 1 - pchisq(q=chi_statistic[1], df=1)
+# Collecting results
+hess <- fit_mishk_eU$hessian #extract and store observed information
+cov <-solve(hess) #invert hess to get cov(mles)
+tab4.1 <- data.frame(parameter = parm,
+                   estimate = fit_mishk_eU$estimate[1:length(parm)],  # extract and store mles
+                   stderr = sqrt(diag(cov))[1:length(parm)],  # compute standard errors of mles
+                   statistic = chi_statistic,
+                   p_value = p_value
+                   ) %>% 
+          column_to_rownames(var="parameter") %>% 
+          t()
+```
+
+```{r}
+tab4.1 %>%
+  kable("html", digits=3,
+      caption = paste("Results from Nonlinear Generalized Least Squares Estimation of the Stock Price Reaction to Information in Current Earnings about Future Earnings. Sample Consists of", nrow(df_sample3) ,"Firm-years between 1980 and 2011")) %>%
+  kable_styling(bootstrap_options="striped", full_width=F) %>% 
+  group_rows("Panel A: Regressions using actual values offinancial statement variables", 1, 4) %>% 
+  column_spec(1, bold = T, border_right = T)
+```
+
+### Table 5
+
+```{r results='hide'}
+loglikenorm1<-function(p, data)
+{
+  g0 <- p[1]
+  g1 <- p[2]
+  g2 <- p[3]
+  beta <- p[4]
+  g0star <- p[5]
+  g1star <- p[6]
+  g2star <- p[7]
+  const <- rep(1, dim(data)[1])
+  sig1 <- p[8]
+  sig2 <- p[9]
+  resid1 = data$LeadEarn - g0*const - g1*data$Acc - g2*data$CF
+  resid2 = data$RetExSize - beta*(data$LeadEarn - g0star*const - g1star*data$Acc - g2star*data$CF)
+  loglike_mod1 <- sum(-log(sig1*sqrt(2*pi))- (1/(2*sig1^2))*(resid1)^2)
+  loglike_mod2 <- sum(-log(sig2*sqrt(2*pi))- (1/(2*sig2^2))*(resid2)^2)
+  # note use of sum
+  loglike<- -loglike_mod1 - loglike_mod2 
+  return(loglike)
+}
+
+loglikenorm2 <- function(p, data)
+{
+  g0 <- p[1]
+  g1 <- p[2]
+  g2 <- p[3]
+  beta <- p[4]
+  g0star <- p[5]
+  const <- rep(1, dim(data)[1])
+  sig1 <- p[6]
+  sig2 <- p[7]
+  resid1 = data$LeadEarn - g0*const - g1*data$Acc - g2*data$CF
+  resid2 = data$RetExSize - beta*(data$LeadEarn - g0star*const - g1*data$Acc - g2*data$CF)
+  loglike_mod1 <- sum(-log(sig1*sqrt(2*pi))- (1/(2*sig1^2))*(resid1)^2)
+  loglike_mod2 <- sum(-log(sig2*sqrt(2*pi))- (1/(2*sig2^2))*(resid2)^2)
+  # note use of sum
+  loglike<- -loglike_mod1 - loglike_mod2 
+  return(loglike)
+}
+
+oldw <- getOption("warn")
+options(warn = -1)
+fit_mishk_aU <- nlm(loglikenorm1,
+                    p=c(0, 1, 1, 0, 0, 1, 1, 1, 1), 
+                    data=df_sample3, hessian=TRUE)
+fit_mishk_aC <- nlm(loglikenorm2,
+                    p=c(0, 1, 1, 0, 0, 1, 1), 
+                    data=df_sample3, hessian=TRUE)
+options(warn = oldw)
+
+# Computing likelihood ratio test
+# The number of df is the number of parameters that differ 
+# between the two nested models
+parm <- c("g0", "g1", "g2", "beta", "g0*", "g1*", "g2*")
+chi_statistic <- rep(NA, length(parm))
+chi_statistic[1] <- fit_mishk_aC$minimum - fit_mishk_aU$minimum
+p_value <- rep(NA, length(parm))
+p_value[1] = 1 - pchisq(q=chi_statistic[1], df=2)
+# Collecting results
+hess <- fit_mishk_aU$hessian #extract and store observed information
+cov <-solve(hess) #invert hess to get cov(mles)
+tab5.1 <- data.frame(parameter = parm,
+                   estimate = fit_mishk_aU$estimate[1:length(parm)],  # extract and store mles
+                   stderr = sqrt(diag(cov))[1:length(parm)],  # compute standard errors of mles
+                   statistic = chi_statistic,
+                   p_value = p_value
+                   ) %>% 
+          column_to_rownames(var="parameter") %>% 
+          t()
+```
+
+```{r}
+tab5.1 %>%
+  kable("html", digits=3,
+      caption = paste("Results from Nonlinear Generalized Least Squares Estimation of the Stock Price Reaction to Information in the Accrual and Cash Flow Components of Current Earnings about Future Earnings. Sample Consists of", nrow(df_sample3) ,"Firm-years between 1980 and 2011")) %>%
+  kable_styling(bootstrap_options="striped", full_width=F) %>% 
+  group_rows("Panel A: Regressions using actual values of financial statement variables", 1, 4) %>% 
+  column_spec(1, bold = T, border_right = T)
+```
+

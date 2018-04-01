@@ -1,0 +1,259 @@
+---
+title: "Replication of Sloan 1996 I - Construction of the Sample"
+output: 
+  html_notebook: 
+    code_folding: none
+    toc: yes
+---
+
+*(C) Harm Schuett 2018, schuett@bwl.lmu.de, see LICENSE file for details*
+
+The purpose of this notebook is to replicate the sample of the famous accrual anomaly paper by Richard Sloan ["Do Stock Prices Fully Reflect Information in Accruals and Cash Flows about Future Earnings?"](https://www.jstor.org/stable/248290?seq=1#page_scan_tab_contents) using R. First things first, what's the paper about again?
+
+This notebook creates a sample and computes tables 1-5 from Sloan (1996) using a Compustat period from 1980 till 2010
+
+## Imports and preliminaries
+
+```{r}
+library(dplyr)                  # data wrangling
+library(lubridate)              # for easy date handling
+library(purrr)                  # for map functions
+library(broom)                  # handling lists of regression results
+library(tidyr)                  # working with nested dataframes
+rollapplyr <- zoo::rollapplyr   # rolling window applications
+```
+
+## Loading Data
+
+### Loading financial statement data
+
+The original Sloan (1996) uses financial statement data from the Annual Compustat North America File. Yuo can use the [download-wrds-data.R](../Src/download-wrds-data.R) file to download the data. But you need a WRDS account for it, which you can get by applying for one on the wrds website as long as you have an lmu account.
+
+After you downloaded the data, we will import the raw data for further processing
+
+```{r}
+df_funda <- readRDS("../Data/raw_compu.rds")
+glimpse(df_funda)
+```
+
+Gvkey, is Compustat's primary company key. Datadate and fyear denote the fiscal year the row belongs to. 
+
+```{r}
+head(df_funda)
+```
+
+Other databases have other identifiers. For instance, Crsp uses permno as the prime identifier for stock issuances. Thus, you can have multiple permnos if a company has different share classes etc. The computations in the [download-wrds-data.R](../Src/download-wrds-data.R) file tried to account for that as best as possible and match a primary lpermno to each gvkey where possible (see the file for further info)
+
+Next things to do:
+
+1. Removing unneeded variables
+1. Computing main test variables
+1. Preparing for merging the crsp data on this
+
+```{r}
+df_funda2 <- df_funda %>% 
+  # in case sic has changed over time, get historical sic;
+  mutate(sic = if_else(is.na(sich) == F, sich, as.numeric(sic))) %>% 
+  mutate(sic = sprintf("%04d", sic)) %>% 
+  # get rid of Financial instiutions;
+  mutate(Sic3 = as.integer(substr(sic, 1, 3))) %>% 
+  filter(Sic3 <= 600 | Sic3 >= 699) %>% 
+  # get rid of unneeded stuff
+  select(-linkdt, -linkprim, -linkenddt, -linktype, 
+         -liid, -sich, -lpermco, -Sic3, -usedflag) %>% 
+  # computed main variables
+  arrange(gvkey, datadate) %>% 
+  group_by(gvkey) %>% 
+  mutate(scale = (at + lag(at))/2) %>% 
+  mutate(Earn    = oiadp / scale,
+         CA = (  (act - lag(act)) - (che - lag(che))  ) /scale,
+         CL   = (  (lct - lag(lct)) - (dlc - lag(dlc)) - (txp - lag(txp))  )/scale,
+         Dep  = dp/scale) %>% 
+  mutate(Acc = CA - CL - Dep) %>% 
+  mutate(CF = Earn - Acc,
+         LeadEarn = lead(Earn)) %>% 
+  ungroup() %>% 
+  # Build year-month merge identifier, but 3 months after FYE
+  mutate(year_month = strftime(datadate %m+% months(15) , format="%Y-%m"),
+         year_month.fy = strftime(datadate, format="%Y-%m")) %>% 
+  rename(permno=lpermno)
+```
+
+
+```{r}
+summary(select(df_funda2,
+               Acc, oiadp, scale, act, che, che, lct, dlc, txp, dp))
+```
+
+Quite a few missing values.
+
+### Loading and merging CRSP data
+
+```{r}
+df_stock <- readRDS("../Data/raw_crsp.rds")
+glimpse(df_stock)
+```
+
+### Computing buy-and-hold returns
+
+The dataset contains monthly buy-and-hold returns. We need 12-month buy-and-hold returns for the tests. We can compute buy-and-hold returns of any length by changing them together like this:
+
+\begin{equation}
+  BHR_{t=1}^k = \prod_{t=1}^k (1+BHR_t)-1
+\end{equation}
+
+this is what we are going to do next. For this we first define a function that computes this product on rolling windows of length 12 (for 12 months). Then we are going to apply it to the respective rows in the dataframe. But we must make sure that the program knows to only use observations belonging to the same firm. We use the groupby statement for that
+
+```{r}
+roll_rprod <- function(variable) {
+  rollapplyr(data=( variable + 1 ), 
+             width=12, FUN=prod, fill=NA, na.rm=T) - 1
+}
+
+df_stock2 <- df_stock %>% 
+  select(-ncusip, -ticker, -shrcd, -exchcd, -siccd, -vol) %>% 
+  arrange(permno, date) %>% 
+  group_by(permno) %>% 
+  mutate(ret.12 = roll_rprod( ret ),
+         decret.12 = roll_rprod( decret ),
+         rf.12 = roll_rprod( rf ),
+         mktrf.12 = roll_rprod( mktrf ),
+         RetVol = rollapplyr(data=( ret ), 
+                             width=12, FUN=sd, fill=NA, na.rm=T)
+         ) %>% 
+  ungroup() %>% 
+  mutate(RetExSize = ret.12 - decret.12)
+```
+
+```{r}
+df_stock2 %>% 
+  select(permno, date, ret, ret.12, RetVol) %>% 
+  head(21)
+```
+
+## Commputing accrual ranks and portfolio returns
+
+```{r}
+df_accr_pot <- df_funda2 %>% 
+  select(permno, datadate, fyr, Acc) %>% 
+  # need FYR because we need to restrict sample to
+  # fiscal year end = December firms. 
+  filter(fyr == 12) %>% 
+  mutate(year = year(datadate)) %>%
+  arrange(permno, year) %>% 
+  group_by(year) %>% 
+  mutate(AccRank = ntile(Acc, 10)) %>% 
+  ungroup()
+
+head(df_accr_pot)
+```
+
+```{r}
+summary(df_accr_pot)
+```
+
+Nr non-missing:
+
+```{r}
+colSums(!is.na(df_accr_pot))
+```
+
+Merging 
+
+```{r}
+df_port_ret <- df_stock2 %>% 
+  mutate(year = year(date),
+         month = month(date),
+         RetExRf = ret.12 - rf.12) %>% 
+  filter(month == 12) %>% 
+  left_join(df_accr_pot,
+            by=c("permno", "year"))
+```
+
+Nr. non-missing:
+
+```{r}
+colSums(!is.na(df_port_ret))
+```
+
+Now we have everything to compute portfolio betas. We really only need them for table 1, but they are nevertheless important for the argument in later tables. For this we need to compute CAPM regressions by accrual portfolios. 
+
+We are going to use some nested structures here. Mainly because it makes code slightly easier to reason about, once you can wrap your head around the fact that a dataframe column can contain other data frames. 
+
+```{r}
+df_mean_port <- df_port_ret %>% 
+  # computing means per rank per year
+  filter(complete.cases(AccRank, year, RetExRf, mktrf.12)) %>% 
+  group_by(AccRank, year) %>% 
+  summarize(AvRetExRf.12 = mean(RetExRf), 
+            AvMktRf.12 = mean(mktrf.12))%>% 
+  # Now we nest to store all data belonging to an AccRank
+  # into its own data frame (a tibble) into one row:
+  nest(-AccRank)
+
+head(df_mean_port)
+```
+
+For example, the first entry in the data column (for AccRank 1) looks like this:
+
+```{r}
+df_mean_port$data[[1]]
+```
+
+What this does is that we can now apply functions like regressions "row-wise", which makes it easier to debug:
+
+```{r}
+compute_portf_regs <- function(data) {
+  model <- lm(AvRetExRf.12 ~ AvMktRf.12, data=data)
+  # broom's tidy to get a df representation of results
+  return(tidy(model))
+}
+
+df_mean_port$model <- map(df_mean_port$data, compute_portf_regs)
+head(df_mean_port)
+```
+
+And now we unnest the model column:
+
+```{r}
+df_port_betas <- df_mean_port %>% unnest(model)
+head(df_port_betas)
+```
+
+## Merging everything together
+
+First we need to do some adjustements, so that we can match next year's returns on this years earnings. For this, we take the original crsp dataframe. Take out the variables for which we want to merger their future values to the dataframe and offset the date axis by 15 months into the future
+
+Bonus question: Why 15 months into the future?
+
+```{r}
+df_sample <- df_funda2 %>% 
+  group_by(fyear) %>% 
+  mutate(AccRank = ntile(Acc, 10)) %>% 
+  ungroup() %>% 
+  left_join(df_stock2 %>% select(permno, year_month, RetExSize, RetVol),
+            by=c("permno", "year_month")) %>% 
+  left_join(df_stock2 %>% select(permno, year_month, MktValEq),
+            by=c("permno", "year_month.fy"="year_month")) %>% 
+  left_join(df_port_betas %>% filter(term == "AvMktRf.12") %>% 
+                              select(AccRank, estimate) %>% 
+                              rename(Beta = estimate),
+            by="AccRank") %>% 
+  mutate(Size = log(MktValEq))
+dim(df_sample)
+```
+
+## Finally, reducing to firm-years with valid data only
+
+```{r}
+df_sample_final <- df_sample %>% 
+  filter(complete.cases(Earn, Acc, LeadEarn, Size, RetExSize, Beta))
+dim(df_sample_final)
+```
+
+Saving
+
+```{r}
+saveRDS(df_sample_final, "../out/data/sloan-sample.rds")
+```
+
