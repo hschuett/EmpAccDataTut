@@ -10,14 +10,26 @@ Why R? Python might be a nicer language and Julia might be more performant. And 
 
 This material is intended to be simple, introductory teaching material for master students. Still, if the code in here is useful for your research or teaching, by all means use it. If you have time, drop me a line and let me know what you used it for. Of course, if there are bugs or more elegant ways of doing something, let me know and I will incorporate it; I am always keen on improving my coding.
 
-## R packages used in these sessions
+## R and RStudio set up instructions
 
-We will use quite a few different R packages in the tutorial sessions. To install the necessary packages run:
+### R and RStudio
 
-    intall.packages("tidyverse, "RPostgres", "lubridate", "gtrendsR",
+1. Download and install R from CRAN, [the Comprehensive R Archive Network](https://www.r-project.org/). definitely install a precompiled binary distribution for your operating system. Click on the *download R* link, download, then install the right version for your operating system.
+
+2. Install RStudio's IDE (stands for integrated development environment) [link here](http://www.rstudio.com/ide/download/) 
+
+### R packages used in these sessions
+
+We will use quite a few different R packages in the tutorial sessions. To install the necessary packages run the following command from inside RStudio's console:
+
+    install.packages("tidyverse, "RPostgres", "lubridate", "gtrendsR",
                     "quantmod", "kableExtra", "broom", "lfe", "MatchIt",
                     "igraph" "stargazer", "MASS", "sandwich", "lmtest",
                     "gridExtra", "haven")
+
+see below:
+
+![console image](console.png)
 
 ## Data used in these sessions
 
