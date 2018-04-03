@@ -1,0 +1,254 @@
+---
+title: "Quick Introduction to R"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+---
+
+*(C) Harm Schuett 2018, schuett@bwl.lmu.de, see LICENSE file for details*
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Main Keyboard Shortcuts
+
+Wickham, the RStudio chief scientist, says these are the three most important keyboard shortcuts in RStudio:
+
+- **Tab** is a generic auto-complete function. If you start typing in the console or editor and hit the tab key, RStudio will suggest functions or file names
+
+- **Control + the up arrow** (command + up arrow on a Mac) only works in the console and shows you a list of every command you've typed before. 
+
+- **Control + enter** (command + enter on a Mac) takes the current line of code in the editor, sends it to the console and executes it. If you select multiple lines of code in the editor and then hit ctrl/cmd + enter, all of them will run.
+
+## Basic Language Syntax
+
+*Note: adapted and modified from the Stanford [Stats 101](https://web.stanford.edu/class/stats101/intro/intro-resources2.html) course:
+
+> The basic ideas behind R date back four decades and have a strong flavor of exploration: one can grapple with data, understand its structure, visualize it, summarize it etc. Therefore, a common way people use R is by typing a command and immediately see the results. (Of course, scripts can also be written and fed to R for batch execution.)
+
+> The core of R itself is reasonably small, but over time, it has also become a vehicle for researchers to disseminate new tools and methodologies via packages. That is one reason for R’s popularity: there are thousands of packages (10,300+ as of this writing, not to mention over 1,000 for genomic analysis that are part of BioConductor) that extend R in many useful ways.
+
+### Basic R components. 
+
+Basically there are only two things: functions or objects (variables, data.frame, matrix, text, etc.). 
+
+Functions "do things". So every time, you want to "do stuff", you need a function. Objects are glorified value stores. A function is code that takes inputs and produces output. The simplest verions is something like the add fucntion. It takes two inputs and produces the sum as output:
+
+```{r}
+1 + 3
+```
+
+```{r}
+x <- c(-3, 1, 35, 2, 5, 6, 23, 3, 5, 7)  # create some input
+y <- mean(x)  # do something with the input
+y  # let's look at the output
+```
+
+### Vectors and Indexing
+
+As we said before an object is a glorified value store.The most basic object and widely used is a vector. It stores values of the same *type*. You can easily build vectors using the c() function (for "concat").
+
+```{r}
+x_nums <- c(1, 0.3, 200)
+x_mixed <- c(2, "test example")
+x_char <- c("a", "bw", "02")
+x_nums
+x_mixed
+x_char
+```
+
+```{r}
+typeof(x_mixed)
+```
+
+As you can see x_mixed was converted to all character.
+
+Every part of an object has an *index*. IF you want to access components of a vector, you need to know the syntax of those indices. The easiest is to use the order of the components in vectors:
+
+```{r}
+x_nums[1]
+x_nums[3]
+```
+
+This also works for objects with more than one dimension, like matrices. A matrix is very simmilar to a vector in that it can only hold the same type of data:
+
+```{r}
+ma <- matrix(1:100, nrow=10, ncol=10)
+ma
+```
+
+```{r}
+ma[2,]
+```
+
+```{r}
+ma[,3]
+```
+
+```{r}
+ma[2,3]
+```
+
+You can also use indices to change object components
+
+```{r}
+ma[2,3] <- NA
+ma
+```
+
+And you can use true/false maps to select components. For example, we can use the is.na() function to produce a matrix that tells us which elements of ma are missing:
+
+```{r}
+is.na(ma)
+```
+
+```{r}
+ma[is.na(ma) == FALSE]
+```
+
+And as you can see, we got a vector back (because it does not make sense to return a matrix here)
+
+The usual comparison operators are available: == for equality, != for not equal to, >= for greater than or equal to, etc.
+
+```{r}
+ma <= 50
+```
+
+```{r}
+ma[ma <= 50]
+```
+
+There are essentially four types of values you can store in objects. Everything else is a combination thereof:
+
+numerical data: Integers and double numbers
+
+```{r}
+typeof( as.integer(c(1, 0, 3, 4)) )
+```
+
+```{r}
+typeof( c(0.2, 2.3, -2.345) )
+```
+
+character values (text, or string data:)
+
+```{r}
+typeof( c("a", "test", "4,34") )
+```
+
+and factors (categorical variables, like good, average, bad; or male, female)
+
+```{r}
+gender <- factor(c("Male", "Female", "Female", "Male"))
+typeof( gender )
+gender
+```
+
+factors are a special and handy data type for statistical applications. Many applications procedures acknowledge that categorical variables need different handling. For example, the summary function computes different type of summaries
+
+```{r}
+industry_code <- factor(c(10, 20, 10, 10, 20, 30, 30, 40))
+sales <- c(10, 20, 10, 10, 20, 30, 30, 40)
+summary(sales)
+summary(industry_code)
+```
+
+Often you want to store data of different types in one storage object (like a table in Excel). The go to object for that in R is a data.frame (or the tibble--for "tiny table" I think?--, which is a data.frame with less optionality that is used in many tidyerse applications)
+
+```{r}
+df_example <- data.frame(SubjID = c(1,2,3),
+                         Gender = factor(c("male", "female", "female")),
+                         Treat = c(FALSE, TRUE, FALSE),
+                         Hosiptal = c("Idaho", "Oklahoma", "Los Angeles")
+                         )
+df_example
+```
+
+data.frames are opinionated. As you can see, it turned the hospital column into a factor automatically. That is partly why some people prefer tibbles which don't do that. 
+
+```{r}
+str(df_example)
+```
+
+You can index data.frames like matrices:
+
+```{r}
+df_example[2,4]
+```
+
+Or you can use the dollar symbol to get whole columns:
+
+```{r}
+df_example$Hosiptal
+```
+
+The last object we should quickly talk about are lists. Lists are versatile data structures that can grow or shrink and contain heterogeneous data. They are constructed using the list function:
+
+```{r}
+aList <- list(1, 2, list(1, 2, "abc"))
+aList
+```
+
+For whatever reason, lists have a slightly different way of indexing. Note how a list prints differently. Individual elements of the list, unlike the vectors above, are accessed using the double bracket notation, suggested by the printing. Note also that there is no coercion of types.
+
+```{r}
+aList[[2]]
+```
+
+```{r}
+aList[[3]]
+```
+
+```{r}
+aList[[3]][[3]]
+
+```
+
+
+with lists, the single bracket indexing behaves differently from double bracket indexing. The rule is simple: single bracket indexing returns the same type of object (at least for lists). So this returns a list again:
+
+```{r}
+aList[2]
+```
+
+```{r}
+aList[[2]]
+```
+
+One last thing, R allows one to add names to objects.
+
+```{r}
+named_x <- c(a=1.02, b=2, 3, 8, 0)
+named_x
+```
+
+Which you can use for accessing as well:
+
+```{r}
+named_x["b"]
+```
+
+This works for lists as well. Most output objects of functions, like the linear model "lm" function, are named lists
+
+```{r}
+named_list <- list(something=named_x, somelse=c(2,3,4))
+named_list
+```
+
+```{r}
+named_list$something
+```
+
+Especially for outputs, naming is an extremely useful tool in writing readable code. One might worry about a performance penalty but it is negligible in most cases and the gains in readability far outweigh any inefficiencies.
+
+Much of R code and functions exploit naming; many functions return more than one value and they are often stuffed into a named vector or list.
+
+*We will leave it at that for a quick intro of the basic building blocks. Everything else, like binding data.frames together, transforming data, working with dates, etc. we will cover as we progress in the course*

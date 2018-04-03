@@ -1,0 +1,242 @@
+---
+title: "Basic and Panel Data Regressions"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+bibliography: ../Lit/bibliography.bib
+---
+
+*(C) Harm Schuett 2018, schuett@bwl.lmu.de, see LICENSE file for details*
+
+```{r}
+library(lfe)
+library(dplyr)
+library(tibble)
+library(ggplot2)
+graph_from_data_frame <- igraph::graph_from_data_frame
+```
+
+## Identification 
+
+### Basics
+
+> "Neatly dividing associations into their causal and spurious components is the task of identification analysis. A causal effect is said to be identified if it is possible, with ideal data (infinite sample size and no measurement error), to purge an observed association of all noncausal components such that only the causal effect of interest remains." -- [@Elwert.2014, p. 33] 
+
+> "One important place where I agree with Sloman (and thus with Pearl and Sprites et al.) is in the emphasis that causal structure cannot in general be learned from observational data alone; they hold the very reasonable position that we can use observational data to rule out possibilities and formulate hypotheses, and then use some sort of intervention or experiment (whether actual or hypothetical) to move further. In this way they connect the observational/experimental division to the hypothesis/deduction formulation that is familiar to us from the work of Popper, Kuhn, and other modern philosophers of science. ... 
+Right now I think the best approach is a combination of the economists' focus on clever designs and identification strategies and the statisticians' ability to build more complicated models to assess what might happen if the strict assumptions fall apart." -- [Gelman.2011]
+
+> "DAGs encode the analyst’s qualitative causal assumptions about the data-generating process in the population." -- [@Elwert.2014, p. 35] 
+
+In recent years, researchers in the social sciences have found DAGs (Directed acyclical graphs) very useful for that purpose. It is a nice and intuitive way to argue about the data-generating model.
+
+The following structure of directed acyclic graphs (DAGs) is based on @Pearl.2009. A nice survey for social scientists is @Elwert.2013. Such DAGS have only a few key elements:
+
+1. Each *node* or point on it represents a random variable (observed or unobserved). Unobserved variables are sometimes marked with a hollow dot. It doesn't matter how the variables are distributed. 
+1. Arrows (*edges*) represent **assumed** direct causal effects. That why we use arrows, causal effects always have a direction (which is assumed). And because they reflect directed effects and the future cannot cause the past, these graphs cannot have circles. If you have one, you made a logical error somewhere.
+1. **Missing** arrows means you assume that no direct causal link exists. This is sometimes the most debatable assumption. In econometrics we also call this an exclusion restriction. You will find that you need those in order to do any kind of identification -- if everything determines everything, there is no sense in trying to identify isolated links. 
+
+A full graph is for a lot of purposes sufficient description of your assumed theory. You can go even further and turn this into a probabilistic graph to estimate Bayesian Networks, but we won't go there. We just use this as a way of communicating theory amongst us. 
+
+Let's look at the following figure as an example of a generic theory. Say we have a research question where we are interested in estimating the *causal* link between a variable *T* (it has become standard practice to call the main variable of interest the *treatment* for reasons we discus later) and a outcome *Y*:
+
+```{r, echo=FALSE}
+Nodes <- tribble(
+  ~nodes,                 ~x, ~y, 
+  "Pre-T-Influence (X)",   0,  1,  
+  "Treatment (T)",         4,  1,  
+  "Y",                     6,  1,  
+  "Mediator (Z)",          1,  0,
+  "Unobserved (V)",        0, -1)
+Edges <- tribble(
+  ~from,                 ~to,
+  "Pre-T-Influence (X)", "Treatment (T)",
+  "Pre-T-Influence (X)", "Y",
+  "Treatment (T)",        "Y",
+  "Treatment (T)",        "Mediator (Z)",
+  "Mediator (Z)",         "Y",
+  "Unobserved (V)",       "Y",
+  "Unobserved (V)",       "Pre-T-Influence (X)",
+  "Unobserved (V)",       "Mediator (Z)")
+plot(graph_from_data_frame(vertices=Nodes, d=Edges, directed=TRUE),
+     vertex.color=c(rep("gray30", nrow(Nodes) -1), "white"), 
+     vertex.size=7,
+     label.font=2, vertex.size=30, vertex.label.cex=1.2,
+     edge.arrow.size=0.5, edge.color="gray70", 
+     vertex.label.color="gray30", vertex.label.dist=2,
+     vertex.label.degree=c(-pi/2, -pi/2, 0, pi/2, pi/2))
+```
+
+This graph is a toy example of a theory (unobserved variables are labeled with a white dot). The theory says:
+
+1. There are (only) 5 variables in all that need to be considered to understand the link between *T* and *Y*. 
+1. It doesn't say that there aren't more determinants of *Y* (or *T* for that matter). But it explicitly says that they can be ignored, if we care only about the link between *T* and *Y*. All the other determinants of *Y* are not crucial (e.g., in a regression they represent the "random" error term). Sometimes, the error term is explicitely included. 
+1. There are two **causal** paths from *T* to *Y*: 
+    - *T* -> *Y* (a direct effect)
+    - *T* -> *Z* -> *Y* (an effect mediated through a mediating variable *Z*)
+1. There are two **non-causal** paths between *T* and *Y*. Those are the key **identification** issues. If we cannot address them, we cannot identify a causal link between *T* and *Y*:
+    - *T* <- *X* <- *V* -> *Y*  (an unobserved confounder that drives variation in *T* and *Y*)
+    - *T* -> *Z* <- *V* -> *Y*  (the confounder also affects the mediating variable *Z*)
+
+So, it should be apparent that one nice way of reasoning about causality is to reason about *paths*. **Causal paths** are those were the the arrows always point away from the treatment and towards the outcome. The total treatment effect is then the set of all causal paths. However, correlation is not causation, as we all no. And non-causal paths also induce correlation between *T* and *Y*. Which is why we care about them. In a way you can think about the identification problem as taking the correlation between *T* and *Y* and scrubbing it from all correlation that is induced by non-causal paths. What is left is the correlation from causal paths and only then can we interpret the correlation in our sample (e.g.,  regression coefficients) as indicating a causal effect.
+
+In the case above, we cannot hope to identify a causal effect of *T* on *Y* unless we find a way to get rid of the influence of *V*. In fact, "... all non-parametric identification problems can be classified as one of three underlying problems: over-control bias, confounding bias, and endogenous selection bias." [@Elwert.2014, p. 32]. And all three are can be characterized as arising from non-causal pathways. 
+
+### Identification and Regression Basics
+
+Grpahs are a non-parametric way of reasoning about identification. An ordinary regression is a parametric method that can be used for identification under a few key assumptions
+
+1. You got the functional form right
+1. You have all confounding effects included properly into the regression
+
+Say for example, an outcome $y$ is of the form: 
+
+```{r}
+set.seed(13345)
+nr_samples <- 50
+x <- rnorm(n=nr_samples, 0, 1)
+u <- rnorm(nr_samples, 0, 20)
+y <- 2 + 3 * x + u
+```
+
+Then, running a regression of the form $y = a_0 + a_1 x + u$ will give us the correct result on average:
+
+```{r}
+set.seed(13345)
+nr_samples <- 50
+nr_regs <- 100
+x <- rnorm(n=nr_samples, 0, 1)
+results <- vector("numeric", length=nr_regs)
+for ( i in seq(1, nr_regs) ) {
+  u <- rnorm(nr_samples, 0, 5)
+  y <- 2 + 3 * x + u
+  results[i] <- coef(lm(y ~ x))["x"]
+}
+qplot(results, binwidth=.2)
+```
+
+This is not generally so if you havea confounder:
+
+```{r}
+set.seed(13345)
+nr_samples <- 50
+nr_regs <- 100
+confounder <- rnorm(n=nr_samples, 0, 1)
+x <- rnorm(n=nr_samples, 0, 1) + 2 * confounder
+results <- vector("numeric", length=nr_regs)
+for ( i in seq(1, nr_regs) ) {
+  u <- rnorm(nr_samples, 0, 5) + 0.5 * confounder
+  y <- 2 + 3 * x + u
+  results[i] <- coef(lm(y ~ x))["x"]
+}
+qplot(results, binwidth=.2)
+```
+
+Or if you guessed the functional form wrong:
+
+```{r}
+set.seed(13345)
+nr_samples <- 50
+nr_regs <- 100
+x <- rnorm(n=nr_samples, 0, 1)
+results <- vector("numeric", length=nr_regs)
+for ( i in seq(1, nr_regs) ) {
+  u <- rnorm(nr_samples, 0, 5)
+  y <- 2 + 3 * x - 2 * x^2 + u
+  results[i] <- coef(lm(y ~ x))["x"]
+}
+qplot(results, binwidth=.2)
+```
+
+Dealing with the functional form is tricky. Matching procedures can help to make inferences less depended on functional form ( will talk about that next session).
+
+Dealing with confounders is usually also tricky. If we can measure them and have the functional form correct, then we can simply account for them by including them into the regression. Which is why regressions are such a popular methosd. However, usually counfing variables are unobservable or hard to measure variables. 
+
+## Fixed Effects Panel Methods
+
+In financial data settings, we often have access to panel data (data that has a time and a cross-sectional dimension). In those cases we can get rid of some confounders by explointing the variation in along those dimensions. For instance, if one where to measure test scores of the same students across multiple school years but with different randomly assigned teachers in different years. Student ability should not vary over the years, so we should be able to figure out the teacher effect.
+
+Imagine the following form: 
+
+$$y_{i,t} = X_{i,t}\beta + c_i + u_{i,t}$$
+where $c_i$ does not have a time dimension. These are individual $i$ specific influences on $y$. If we cannot measure all the things in $c_i$ they would end up in the error term. And if they are correlated with $X$, then we have a correlated omitted variable problem. 
+
+In such a setting, where we have data across both time $t$ and individuals $i$ we can address this issue. If we are willing to discard information. Imagine averaging all your data for each individual:
+
+$$\bar{y}_{i} = \bar{X}_{i}\beta + c_i + \bar{u}_{i}$$
+since $c_i$ does not vary over time, their average is just the $c_i$. If we now subtract the average from the actual values, $c_i$ drops out of the equation:
+
+$$(y_{i,t}-\bar{y}_{i}) = (X_{i,t} -\bar{X}_{i})\beta + (c_i - c_i) + (u_{i,t} - \bar{u}_{i})$$
+
+As you can see, the $\beta$s of such a regression are the same as in the original, but the $c_i$ are gone. This is called a **Within-Estimator** or **Fixed-Effects Estimator**. It is called "within" because by averaging, we eliminate all variation between units $i$! All the variation that is left to be explained by $\beta$ is the variation across time "within" a unit $i$. Or said another way, if $i$ would be people, all time invariant things like gender would also be taken out and cannot be analyzed anymore. That is the price to pay for this estimation technique. 
+
+```{r}
+set.seed(999)
+d1 <- data.frame(individual = c(1,1,1,1,1,0,0,0,0,0),
+                 time = c(1,2,3,4,5,1,2,3,4,5),
+                 time_fe = c(2,5,1,2,0, 2,5,1,2,0),
+                 ind_fe = c(2,2,2,2,2,7,7,7,7,7),
+                 u = rnorm(10, mean=0, sd=3)
+                 )
+d1$x <- 1.3 * d1$ind_fe - 2 * d1$time_fe + rnorm(10, mean=1, sd=3)
+d1$y <- 2* d1$time_fe + d1$ind_fe + 2 * d1$x + d1$u
+
+cblue <- rgb(0.2, 0.3, 0.7 ,0.8)
+cred <-  rgb(0.7, 0.3, 0.2, 0.8)
+plot(x=d1$x, y=d1$y, 
+     pch=19, col=c(rep(cblue, 5), rep(cred, 5)))
+legend(x="bottomright", legend=c("Person 1","Person 0"), col=c(cblue, cred), pch=19)
+```
+
+```{r}
+summary(lm(y ~ x, data=d1))
+```
+
+
+Let's see what happens if we take out the mean across people and the mean across time:
+
+```{r}
+d2 <- d1 %>% 
+  group_by(individual) %>% 
+  mutate(av_y = mean(y),
+         av_x = mean(x)) %>% 
+  ungroup() %>% 
+  mutate(within_y = y - av_y,
+         within_x = x - av_x)
+av_y <- unique(d2$av_y)
+av_x <- unique(d2$av_x)
+par(mfrow=c(1,2))
+plot(x=d2$x, y=d2$y, 
+     pch=19, col=c(rep(cblue, 5), rep(cred, 5)))
+abline(h=av_y[1], col="blue")
+abline(h=av_y[2], col="red")
+abline(v=av_x[1], col="blue")
+abline(v=av_x[2], col="red")
+plot(x=d2$within_x, y=d2$within_y, 
+     pch=19, col=c(rep(cblue, 5), rep(cred, 5)))
+```
+
+It looks like these plots are quite away from the individual means. That is because there is so much other stuff going on and that is simply the result of random noise. But once we take out the person specific mean, 
+on both $y$ and $x$ we get more mixture. 
+
+The `lfe` package is a great package for *linear fixed effects* models. The syntax of its `felm()` founction is very similar to the normal `lm()` function. But it has three additional formula parts `felm(y ~ x | FEs | IVs | Clusters, data)`. We won't cover IVs and will talk about cluster robust standard errors next.
+
+```{r}
+summary(felm(y ~ x | individual | 0 | 0, data=d1))
+```
+
+```{r}
+summary(felm(y ~ x | individual + time | 0 | 0, data=d1))
+```
+
+# Excercises
+
+Please load the airfares data set and use it to explain the fare of a route. Use normal (pooled) OLS, then think about why a Fixed-Effects Estimator might help here. Then run a regression. Explain why you get certain results and certain errors.
+
+1. Draw a graph and think of the theoretical connection
+2. Load the dataset and check the data. What variables are in there? What is in there that helps you identify the causal effect?
+3. Design a regression
+4. Estimate the effect
+5. Interpret. Is your estimate capturing the causal effect, or is still something missing?
+
+## References

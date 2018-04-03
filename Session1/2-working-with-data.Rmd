@@ -1,0 +1,194 @@
+---
+title: "Working with Data"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+---
+
+*(C) Harm Schuett 2018, schuett@bwl.lmu.de, see LICENSE file for details*
+
+## The Current Working Directory
+
+For most data applications, you want to load and save files. To do that it is important to know where your application's current working directory is. It is the reference point for all your load and save operations. You can check and set the location of the working directory with `getwd()` and `setwd()`:
+
+```{r}
+getwd()
+```
+
+```{r}
+# Note I commented these out here because working inside an RNotebook
+# I would not normally change the working directory. But for scripts
+# This is something you should normally set.
+# setwd("../../EmpAccDataTut/")
+getwd()
+```
+
+You can use ``../` to go one folder backwards from where your current wd is looking at. so the above `../../EmpAccDataTut/` means "go two folders back and then jump into the EmpAccDataTut" folder.
+
+## Loading Data
+
+There are many ways of loading data in RStudio, but the best way of doing so in a replicable way is by calling a command from within your R script. 
+
+Let's download some data from the net and then load it:
+
+```{r}
+download.file("https://www.census.gov/2010census/csv/pop_change.csv",
+              "../Data/pop_change.csv")
+```
+
+I prefer to put a "df_" before data.frame objects, so that all of them are grouped together in the Enironment pane. The most commonly used file format for small to medium data sets is .csv (comma searated variables). It is a simple text file. You can load it via the read.csv function that returns a data.frame as output:
+
+```{r}
+df_pop_change = read.csv("../Data/pop_change.csv", skip=2)
+str(df_pop_change)
+```
+
+```{r}
+head(df_pop_change, 6)  # print first 6 rows
+```
+
+## Data Wrangling
+
+### Installing packages
+
+Now this is not a very useful data representation for actually analyzing data. And that is common. Usually, your data analysis tasks will demand a considerable amount of data wrangling before you can actually work with it. This one is a small example to get your feet wet. 
+
+We will use the dplyr package quite heavily now. Many of these things you can do in base R without the package too, but it is simpler and faster in dplyr so why bother. 
+
+dplyr is part of the tidyverse collection of packages. We will need to install them first using the `install.packages()` function
+
+```{r}
+# install.packages("dplyr")
+# This will install a bunch of packages, not just dplyr. 
+# But we will used most of them anyway.
+# install.packages("tidyverse")
+```
+
+We load packages using the library() function.
+
+```{r}
+library(dplyr)    # data wrangling
+library(tidyr)    # transposing data
+library(ggplot2)  # plotting library
+```
+
+You will see some warnings. dpylr masks some already existing functions like the `filter()` function.
+
+### Selecting and Filtering
+
+First things first, we don't want the changes columns and we want the four USA parts. To get the first, we need to `dplyr::select()` columns and for the second we need to `dplyr::filter()` rows. 
+
+```{r}
+unique(df_pop_change$STATE_OR_REGION)
+```
+
+
+```{r}
+regions <- c("Northeast", "Midwest", "South", "West")
+
+df_pops <- df_pop_change %>% 
+  select(STATE_OR_REGION, X1910_POPULATION:X2010_POPULATION) %>% 
+  filter(STATE_OR_REGION %in% regions)
+df_pops
+```
+
+### Transpose operations
+
+To be useful for many applications, we'd like to have this in what's called a *long format*. The tidyr package has a lot of data transposing functions. For example, note that we have one column for different decades. Instead, we'd like to have one column for population with each row bein a decade. One additional complication is that we want this for eacch region. The `'tidyr::gather()` function does just that:
+
+```{r}
+df_pops_long <- df_pops %>% 
+  gather(key="period", value="population", -STATE_OR_REGION)
+df_pops_long
+```
+
+Alternatively, we could have a column for each region. Then we need to go to wide format again, but using the STATE_OR_REGIONcolumn instead. This can be done using `tidyr::spread()`
+
+```{r}
+df_pops_wide <- df_pops_long %>% 
+  spread(key=STATE_OR_REGION, value=population)
+df_pops_wide
+```
+
+### Transforming variables
+
+```{r}
+# this is how you would create a new df with a new variable 
+# in base R. Nothing unexpected and clear to read.
+df_pops_long2 <- df_pops_long
+df_pops_long2$decade <-  as.integer( substr(df_pops_long2$period, 2, 5) )
+# This is how you could do it using dplyr mutate:
+df_pops_long2 <- df_pops_long %>% 
+  mutate(decade = as.integer( substr(period, 2, 5) ))
+```
+
+### Pipes
+
+In fact, we could have chained everything into one long chain using the magrittr pipe operator `%>%`:
+
+```{r}
+df_final_long <- df_pop_change %>% 
+  select(STATE_OR_REGION, X1910_POPULATION:X2010_POPULATION) %>% 
+  filter(STATE_OR_REGION %in% regions) %>% 
+  gather(key="period", value="population", -STATE_OR_REGION) %>% 
+  mutate(decade = as.integer( substr(period, 2, 5) ),
+         population = population / 1000000) %>% 
+  select(-period) %>% 
+  rename(region = STATE_OR_REGION)
+df_final_long
+```
+
+## Plotting
+
+R has two plotting systems. The base R version and the ggplot library. Both are really good and powerful (I have a faible for Python's matplotlib though). You can do great things with both. But they work differently. At the beginning, it makes sense to focus on one. We will focus on ggplot first. 
+
+This is base R:
+
+```{r pressure, echo=FALSE}
+plot(df_pops_wide$West)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot. Not so useful for us in class (because I want to see your code), but very useful for generating business reports.
+
+This is ggplot:
+
+```{r}
+ggplot(data=df_pops_wide, aes(x=seq_along(West), y=West)) +
+  geom_point()
+```
+
+ggplto makes it a bit easier to create print/production ready plots, which is why we focus on that first. 
+
+For example:
+
+```{r}
+plt_raw <- ggplot(data=df_final_long,  # creates canvas
+       # declares what determines x- and y-variables and a grouping for subsets
+       aes(x=decade, y=population, group=region)) +  
+  geom_line(aes(color=region)) +  # draws lines on canvas
+  geom_point(aes(color=region))   # draws points
+plt_raw  
+```
+
+Note above that we used `+` instead of `%>%` because ggplot is an older package. You can pimp these plots in thousands of ways:
+
+```{r}
+min_pop <- floor( min(df_final_long$population) )
+max_pop <- round( max(df_final_long$population) )
+plt_raw + 
+  scale_x_continuous(breaks=seq(1910, 2010, 10)) +
+  scale_y_continuous(breaks=seq(min_pop, max_pop, 20)) +
+  labs(x="Decade",
+       y="Population count (in Millions)",
+       color="Region")+
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank(),
+        legend.position = "bottom",
+        panel.grid.major = element_line(colour = "white", size = 0.2, linetype="solid"),
+        text = element_text(color="#2D2D2D"),
+        plot.background = element_rect(fill="#e2d9cf", colour=NA)
+        )
+```
+
+Btw, maybe take a look and compare the graphs from before to this one. THink about how much more informative this one is. 

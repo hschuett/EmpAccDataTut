@@ -1,0 +1,207 @@
+---
+title: "Working with Financial Data"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+---
+
+*(C) Harm Schuett 2018, schuett@bwl.lmu.de, see LICENSE file for details*
+
+```{r}
+library(gtrendsR)    # query google trends
+library(quantmod)    # query yahoo finance
+library(dplyr)
+library(ggplot2)
+library(lubridate)   # expanded date functionality
+library(tibble)      # a modified data.frame
+na.locf <- zoo::na.locf  # for forward filling missing values
+grid.arrange <- gridExtra::grid.arrange  # for combining plots
+```
+
+
+## Financial Data. 
+
+Financial data has some peculiarities that we warrants some additional explanations. For example, for one thing we usually deal with panels (firm-years, stock-day combinations). Also, we usually get data from many sources and need to match them on different, sometimes changing, identifiers (the joy of mergers, restructurings, etc.) and dates. All this makes dealing with dates is really important.
+
+### Date Types
+
+Base R has some functionality, turning character values into dats:  
+
+```{r}
+as.Date(c("2019-06-15", "2012-02-30"))
+```
+
+```{r}
+as.Date("12/22/2011", format = "%m/%d/%Y")
+```
+
+```{r}
+Sys.timezone()
+```
+
+There are functions in base R (strptime, coercion functions as.Date, as.POSIXlt) that can convert from strings to date-time objects and vice-versa. These often require a format string that specifies how the way the date is formatted, something that can vary all the time. The exact details of the format string (%m for month, %d for day, %Y for year including century, etc.) are described in the documentation for the strptime function.
+
+We are going to use the `lubridate` package however. It has some additoinal functionality that works well with `dplyr`.
+
+```{r}
+ymd(c("20100813", "20120230"))
+
+```
+
+there are also `mdy()` and `dmy()` functions.
+
+```{r}
+mdy(c("6/12/16", "2/9/16"))
+```
+
+and functionality up to seconds:
+```{r}
+parse_date_time("4/03/2018 12:34:12",
+                orders = "%m/%d/%y %H:%M:%S",
+                tz = Sys.timezone())
+```
+
+### Merging, Joining etc
+
+When working with multiple sources, we will very frequently have to combine multiple data.frames in all kinds of ways. We will discuss some simple ones with some toy data and then discuss more complicated ones with Compustat data in later sessions.
+
+## Google trends and stock data
+
+### Google trends
+
+Using google trends. Performing a query is easy, using the `gtrends()` function. Let's collect google trends for the term iPhone for the last year:
+
+```{r}
+# gt.1 <- gtrends(c("iPhone"), time = "2017-04-02 2018-04-02")
+# saveRDS(gt.1, "../out/gt-iPhone.rds")
+```
+
+```{r}
+gt.1 <- readRDS("../out/gt-iPhone.rds")
+```
+
+The function returns a named list. For example the interest over time.
+
+```{r}
+head(gt.1$interest_over_time)
+```
+
+Or the related queries:
+
+```{r}
+gt.1$related_queries
+```
+
+### Stock data
+
+Later on, we will use WRDS data services, but for now, we will use something free and simple: the `quantmod` package to download data from yahoo, google, etc. 
+
+```{r}
+# AAPL_data <- getSymbols("AAPL",src="yahoo", auto.assign=FALSE)
+# saveRDS(AAPL_data, "../out/AAPL-data.rds")
+```
+
+```{r}
+AAPL_data <- readRDS("../out/AAPL-data.rds")
+```
+
+```{r}
+head(AAPL_data)
+```
+
+## Analyzing the Relation between Google Trends and Stock Prices
+
+### Merging of Data Sources
+
+To analyze whether there is a relation between iphone mentions and Apple's stock price, we need to first merge the data together. 
+
+First, we will take the stock data and filter it.
+
+```{r}
+tb_prc <- AAPL_data %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var="date") %>% 
+  as_tibble() %>% 
+  mutate(date = ymd(date)) %>% 
+  filter(date >= ymd("2017-04-02") & date <= ymd("2018-04-02"))
+head(tb_prc)
+```
+
+```{r}
+unique(gt.1$interest_over_time$gprop)
+```
+
+```{r}
+unique(gt.1$interest_over_time$geo)
+```
+
+
+```{r}
+tb_gt <- gt.1$interest_over_time %>% 
+  as_tibble() %>% 
+  select(date, hits) %>% 
+  mutate(date = as_date(date))
+head(tb_gt)
+```
+
+now lets merge this together. Note that we do not have a google trends date for every day. And funny enough, it is the days that are missing in the stock data. So let's merge the trends data on the stock data in a way that we do not loose stock data. This is called a full join. 
+
+```{r}
+tb_all <- tb_prc %>% 
+  full_join(tb_gt, by=c("date"="date")) %>% 
+  select(date, AAPL.Adjusted, hits) %>% 
+  arrange(date)
+head(tb_all, 10)
+```
+
+So, obviously the stock data has trading (week days), whereas google trends has weekends. Let's try to roll the hits forward for the next week. For this we use `zoo::na.locf`. The `zoo` package is a package specialized for time-series stuff. 
+
+```{r}
+tb_final <- tb_all %>% 
+  mutate(hits = na.locf(hits)) %>% 
+  filter(is.na(AAPL.Adjusted) == FALSE)
+head(tb_final)
+```
+
+### Plotting
+
+Now, let's use ggplot to see whether there is a an easy to spot relation
+
+```{r}
+plt_stock <- ggplot(data=tb_final) +
+       geom_line(aes(x=date, y=AAPL.Adjusted))
+plt_trend <- ggplot(data=tb_final) +
+       geom_line(aes(x=date, y=hits))
+grid.arrange(plt_stock, plt_trend, nrow=2)
+```
+
+Doesn't look like iphone mentions affect the stock. But there seem to be some trends in the stock price. One of the obvious things would be new earnings information. Let's mark those.
+
+Also, after some googling you can figure out what caused the big spike in trends. The Iphone 8, Iphone X launch event on Sept-12-17. 
+
+```{r}
+# Apple Earnings releases:
+eas <- c("17-Q2"=ymd("2017-05-02"),
+         "17-Q3"=ymd("2017-08-01"),
+         "17-Q4"=ymd("2017-11-02"),
+         "17-Q5"=ymd("2018-02-01"))
+plt_base <- ggplot(data=tb_final, aes(x=date)) +
+  # mark earnings announcements
+  geom_vline(xintercept=eas, color="#009999") + 
+  # mark 
+  geom_vline(xintercept=ymd("2017-09-12"), color="red") +
+  scale_x_date(date_breaks="2 months", expand=c(0,0)) +
+  labs(x="")
+plt_stock <- plt_base +
+       geom_line(aes(y=AAPL.Adjusted))
+plt_trend <- plt_base +
+       geom_line(aes(y=hits))
+grid.arrange(plt_stock, plt_trend, nrow=2)
+```
+
+Now, what can you learn from these pictures? 
+
+## Your Turn. 
+
+What else might drive Apple's stock? Can you think of other google trends queries that might explain stock price movements? Think about it then add those trends to the data and create another plot. Also, repeat this excercise for stock volume.

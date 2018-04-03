@@ -1,0 +1,445 @@
+---
+title: 'Clustered Standard Errors'
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+bibliography: ../Lit/bibliography.bib
+---
+
+*(C) Harm Schuett 2018, schuett@bwl.lmu.de, see LICENSE file for details*
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(lfe)      # for FE models with instruments
+library(stargazer)
+mvnorm   <- MASS::mvrnorm  # loading a multivariate normal sampler
+vcovHC   <- sandwich::vcovHC
+coeftest <- lmtest::coeftest
+```
+
+# Introduction and Recap
+
+*One of the most obscure areas for applied researchers is how to best compute standard errors*
+
+Simple OLS assumes independent identically distributed errors ($u_i$ in $y_i = \beta_0 + \beta_1x_{1,i} + \beta_2x_{2,i} + b_3x_{3,i} + \dots + u_i$) in order for the standard errors to be correct (Go back to the Day 1 material to refresh you memory on this). However, this assumption is frequently implausible in observational studies. Remember that $u_i$ captures all the influences on $y$ that we have not measured (or measured with noise). It is very unlikely (other than in a very controlled experiment) that the sum of all those influences behaves that nicely. 
+
+Rewriting the above equation in vector form $y = X\beta + u$ and going back to $\hat{\beta} = \beta + (X'X)^{-1}X'u$, let's quickly recap this estimator's variance: 
+
+\begin{align}
+  var[\hat{\beta}|X] &= E[((X'X)^{-1}X'u)((X'X)^{-1}X'u)'|X]\\
+                     &= E[(X'X)^{-1}X'uu'X(X'X)^{-1}|X]\\
+                     &= \underbrace{(X'X)^{-1}X'}_{\text{Weights}}\underbrace{E[uu'|X]}_{\text{Variance-Covariance of u}}\underbrace{X(X'X)^{-1}}_{\text{Weights}}\\
+\end{align}
+
+So, here again you can see, the variance of $\hat{\beta}$ (figuratively speaking: the amount of dart board (see Day 1) that the estimator is spraying) is a function of the $E[uu'|X]$, variance-covariance matrix of the error term $u$. The more important the unmeasured influences there are in $u$ (in terms of variation contribution for $Y$), the more they will interfere with measuring the relation between $Y$ and $X$. 
+
+The key term remains $E[uu'|X]$, which, given the focus of the whole discussion on $u$ -- the unmeasured influences -- so far shouldn't surprise you anymore. This is a matrix with has the form: 
+
+\begin{align}
+E[uu'|X] = 
+\begin{pmatrix}
+\sigma^2_{u_1}   & \sigma_{u_1,u_2} & \dots & \sigma_{u_1,u_n}\\
+\sigma_{u_1,u_2} & \sigma^2_{u_2}   & \dots & \sigma_{u_2,u_n}\\
+\dots            & \dots            & \dots & \dots           \\
+\sigma_{u_1,u_n} & \sigma_{u_2,u_n} & \dots & \sigma^2_{u_n}
+\end{pmatrix}
+\end{align}
+
+We said that this matrix is what really drives the shape of the (co-)variance of the coefficients in $\hat{\beta}=(\hat{\beta}_0, \hat{\beta}_1, \hat{\beta}_2, \dots)$. The problem is of course that we do not really know how this matrix looks like. **We can only make assumptions about its shape**. We will now talk about what to assume here, depending on the situation (aka clustered standard errors and the like). Just as a comparison, so far we used the classic text book example of **homoscedasticity**: 
+
+\begin{align}
+E[uu'|X] = 
+\begin{pmatrix}
+\sigma^2_{u}   & 0 & \dots & 0\\
+0 & \sigma^2_{u}   & \dots & 0\\
+\dots            & \dots            & \dots & \dots\\
+0 & 0 & \dots & \sigma^2_{u}
+\end{pmatrix}
+= \sigma^2_u 
+\begin{pmatrix}
+1   & 0 & \dots & 0\\
+0 & 1   & \dots & 0\\
+\dots            & \dots            & \dots & \dots\\
+0 & 0 & \dots & 1
+\end{pmatrix}
+= \sigma^2_u I
+\end{align}
+
+I words, this says that the unmeasured influences spray the same amount of noise onto the relation between $Y$ and $X$ irrespective of what observation we are looking at and the noise on one observation does not affect the noise in another. Plugging this into the $var[\hat{\beta}|X]$ yields:
+
+$$var[\hat{\beta}|X] = (X'X)^{-1}\sigma^2_u IX(X'X)^{-1} = \sigma^2_u (X'X)^{-1}$$
+
+
+# Inference under more plausible assumptions
+
+The problem is that quite often the unmeasured influences left in the error term have certain patterns (even if the unmeasured influences are uncorrelated with the treatment variable of interest). The key problems are: 
+
+- **Sampling issues** It could be that certain groups (like age groups, states, industries) are sampled more often than others. In that case, you do not have a random sample. The groups that are more likely to be sampled likely have other unmeasured influences in common and thus the errors of observations in these groups will likely be correlated. Also, In essence you loose coefficient estimator precision. In the survey methods literature this is called *design effect* (I believe): "The design effect or Deff is the ratio of the actual variance of a sample to the variance of a simple random sample of the same number of elements" (Kish (1965), p.258)).
+
+- The variance of the outcome varies with some variable. For example, the variance of income is usually higher among families belonging to top deciles of the income distribution than among low income families. (**heteroscedasticity**). 
+
+- Some unmeasured influences do not affect the outcome individually, but they affect groups of observations more or less uniformly within each group. (**cluster correlation**) This most often occurs if you have a treatment that is not homogeneous. Something like this:
+
+$$y_{i, g} = b_0 +b_{1,g} T_{i, g} + u_{i} $$
+
+Each group $g$ has its own treatment effect $g$ (for example, some industries are affect more by a regulation than others). Ideally you would model that (And note that fixed effects do not help you here). If you assume a homogeneous treatment for all, your regression becomes:
+
+$$y_{i, g} = b_0 +b_{1} T_{i, g} + \left((b_{1,g} -b_1) T_{i, g} + u_{i}\right) =  b_0 + b_{1} T_{i, g} + e_{i,g} $$
+Your error term now contains the cut off group-level heterogeneity. 
+
+In all these cases 
+
+
+\begin{align}
+E[uu'|X] = 
+\begin{pmatrix}
+\sigma^2_{u_1}   & \sigma_{u_1,u_2} & \dots & \sigma_{u_1,u_n}\\
+\sigma_{u_1,u_2} & \sigma^2_{u_2}   & \dots & \sigma_{u_2,u_n}\\
+\dots            & \dots            & \dots & \dots           \\
+\sigma_{u_1,u_n} & \sigma_{u_2,u_n} & \dots & \sigma^2_{u_n}
+\end{pmatrix}
+\end{align}
+
+will look very differently. Say for instance, the first two observations belong to the same cluster/group. We would expect the upper left part of the above matrix ($\sigma^2_{u_1}\, \sigma_{u_1,u_2}\, \sigma_{u_1,u_2}\, \sigma^2_{u_2}$) to exhibit some commonality, if the error contains unmeasured influences on $y$ that are varying at the group level. 
+
+If we have a decent idea, what the structure of the error term looks like, we can always specify a model of that structure and estimate it with a suitable estimation procedure (e.g., feasible generalized least squares). This requires strong assumptions however. Most often, researchers are hesitant to put strong assumptions on the error term. 
+
+Instead, one usually tries to find a fairly general standard error estimator that poses no restrictions on the within-cluster correlation, but only assumes clusters of a specific type. These type of estimators are called **cluster-robust variance estimators** (There are lots of different versions). This is a generalization of a **heterscedasticity robust variance estimator** (the most commonly used being the Eicker, Huber, White robust estimator
+
+
+# Some Intuition
+
+In most cases, cluster robust standard errors will actually be larger than homoscedastic ones. Here is my (probably grossly oversimplifying) take on trying to explain why. The difference occurs because your assumption about the "randomness" of the error term serves as a benchmark on which to compare the actual amount of variation in the estimator's residuals. In the homoscedastic case, you assume everything is independently distributed. In a sense, that is a lot of variation (for a given level of magnitude of variation). Now assume instead, you have clusters in your data and observations belonging to the same cluster tend to move in the same direction. Then there is actually less variation across all observations than in the homoscedastic case. If you then compare your estimated residual variation with your benchmark from the homoscedastic case, you would think: okay the estimator looks reasonably precise given I assumed lots of variation across observations. If you instead change your benchmark to the cluster case, your estimated residual variation looks more in line with the cluster variation and your estimator looks much less precise given that benchmark. 
+
+let's look at an example of reduced residual variation:
+
+Say you have 4 obs and would repeat the experiment 100 times. We can simulate this by creating matrices with 4 columns and 100 rows. We assume each columns is normally distributed but possibly the columns are correlated. We can specify this by specifying the $Sigma$ matrix ($E[uu'|X]$):
+
+
+```{r}
+set.seed(666)
+# homoscedastic case
+Sigma0 <- matrix(c(10,  0,  0,  0,
+                    0, 10,  0,  0,
+                    0,  0, 10,  0,
+                    0,  0,  0, 10),
+                 4,4)
+# cluster case (2 clusters)
+Sigma1 <- matrix(c(10,  3,  0,  0,
+                    3, 10,  0,  0,
+                    0,  0, 10,  -3,
+                    0,  0,  -3, 10),
+                 4,4)
+test0 <- mvnorm(n = 100, rep(0, 4), Sigma0)
+test1 <- mvnorm(n = 100, rep(0, 4), Sigma1)
+
+residuals0 <- as.vector(test0)
+residuals1 <- as.vector(test1)
+var(residuals0)
+var(residuals1)
+```
+
+You can see the difference in overall variation in the residuals.
+
+```{r}
+par(mfrow=c(1,2))
+cblue = rgb(0.2,0.3,0.4,0.8)
+hist(residuals0, col=cblue, breaks=50, xlim=c(-10, 10), ylim=c(0,35))
+hist(residuals1, col=cblue, breaks=50, xlim=c(-10, 10), ylim=c(0,35))
+```
+
+
+# Genral advice
+
+In nearly every study that has a cross-section component, you should either use the Eicker, Huber, White robust estimator or a cluster robust variance estimator. That is because in cross-sectional settings it is nearly always unrealistic to assume homoscedasticity. And depending on the setting, you might have issues that force you to use the cluster estimator instead. According to @Abadie.2017 these are:
+
+1. 2 Reasons, if you have *no* cluster fixed effects in your regression:
+    1. You have clustering in the sampling and there is heterogeneity in the treatment effects,
+    2. You have clustering in the assignment (each cluster has a different likelihood of its members being treated).
+2. 2 Reasons, if you have cluster fixed effects in your regression:
+    1. You have clustering in the sampling and there is heterogeneity in the treatment effects,
+    2. You have clustering in the assignment (each cluster has a different likelihood of its members being treated) and there is heterogeneity in the treatment effects.
+    
+>In other words, heterogeneity in the treatment effects is now a requirement for clustering adjustments to be necessary, and beyond that, either clustering in sampling or assignment makes the adjustments important. [@Abadie.2017, p. 17]
+
+
+# Simulating Scenarios
+
+*Note: In all cases there is slight sampling clustering.*
+
+## Simulating heterogeneous treatment and assignment
+
+### Simulating the sample
+
+To understand these recommendations, we do another simulation. 
+
+Imagine a big population with 100 clusters. Each cluster has a certain probability of being sampled. And then within each cluster, there is a another probability of any member of the cluster being sampled. 
+
+```{r}
+set.seed(999)
+pop_size <- 10000
+nr_clusters <- 100
+# Parameters determining the sampling
+PC <- 0.8  # Probability that any given cluster will be sampled
+PU <- 0.8  # Probability that any given person in remaining clusters will be sampled
+# Parameters determining treatement heterogeneity and treatment assignment
+treat_heterogeneity <- 1   # stdev, determines variation in mean treatment
+assignment_influence <- 1  # set this somewhere between 0 and 1
+cluster_treat_effect <- rep.int(rnorm(n=nr_clusters, mean=0, sd=treat_heterogeneity), 
+                                times=nr_clusters)
+cluster_assign_effect <- rep.int(runif(n=nr_clusters, min=-0.5, max=0.5), 
+                                 times=nr_clusters) * assignment_influence
+
+population <- data.frame(y1 = rnorm(n=pop_size, mean=2, sd=1) + cluster_treat_effect,
+                         y0 = rnorm(n=pop_size, mean=0, sd=1),
+                         w  = rbinom(n=pop_size, size=1, prob=0.5 + cluster_assign_effect),
+                         c  = rep.int(seq.int(1, nr_clusters), times=pop_size/nr_clusters))
+
+sample_by_prob <- function(nr_rows, prob) {
+  chosen <- vector(mode = "logical", length=nr_rows)
+  for (i in 1:nr_rows) {
+    chosen[i] <- sample(c(TRUE, FALSE), size=1, prob=c(prob,1-prob))  
+  }  
+  return(chosen)
+}
+
+chosen_clusters <- seq.int(1, nr_clusters)[sample_by_prob(nr_rows=nr_clusters,
+                                                          prob=PC) == TRUE]
+sampled_clusters <- population[population$c %in% chosen_clusters,]
+final_sample <- sampled_clusters[sample_by_prob(nr_rows=nrow(sampled_clusters),
+                                                prob=PU) == TRUE,]
+final_sample$Treatment <- final_sample$y1 - final_sample$y0
+```
+
+These are the first 5 rows of the sample:
+
+```{r}
+head(final_sample)
+```
+
+
+```{r}
+ggplot(data=final_sample, aes(x=factor(c), y=Treatment)) +
+  geom_jitter(alpha=0.2) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle=90, hjust=1, size=6)) +
+  labs(x="Cluster Index",
+       y="Treatment effect: y(1)-y(0)")
+```
+
+As you can see, not quite every cluster has been sampled. Also there does not seem to be "one"" average effect but patterns across clusters. This is a situation, where clusters have heterogeneous treatment effects.
+
+Let's see if we also have an effect of cluster membership on treatment assignment
+
+```{r}
+trt_propens_by_cluster <- final_sample %>% 
+  group_by(c) %>% 
+  summarize(Pr_T = mean(w))
+ggplot(data=trt_propens_by_cluster, aes(x=factor(c), y=Pr_T)) +
+  geom_col() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle=90, hjust=1, size=6)) +
+  labs(x="Cluster Index",
+       y="Fraction of sampled obs having received treatment")
+```
+
+Obviously the treatment probability is also heterogeneous across clusters.   
+
+### Comparing Standard errors
+
+```{r}
+reg_data <- final_sample
+reg_data$y = ifelse(reg_data$w == 1, reg_data$y1, reg_data$y0)
+# Normal ols w/o fixed effects
+fit1 <- lm(y ~ w, data=reg_data)
+# Normal ols with fixed effects
+fit2 <- felm(y ~ w | c | 0 | 0, data=reg_data)
+# fixed effects with cluster-robust standard errors
+fit3 <- felm(y ~ w | c | 0 | c, data=reg_data)
+stargazer(fit1, fit2, fit3, type="text", omit.stat = c("f", "ser"))
+```
+
+Here we have actually three considerations. First, we should really use cluster fixed effects, due to the correlation between $w$ and cluster membership **and** the cluster effect on the outcome (the leftover heterogeneity). Second, there is treatment heterogeneity and clustered sampling. That is a reason for using clustered standard errors. Third, there is clustered treatment assignment and treatment heterogeneity, which is another reason for clustered standard errors if you have fixed effects already included. We would use model (3) here.
+
+
+
+## Simulating no treatment heterogeneity, but heterogeneous assignment
+
+### Simulating the sample
+
+```{r}
+set.seed(999)
+pop_size <- 10000
+nr_clusters <- 100
+# Parameters determining the sampling
+PC <- 0.8  # Probability that any given cluster will be sampled
+PU <- 0.8  # Probability that any given person in remaining clusters will be sampled
+# Parameters determining treatement heterogeneity and treatment assignment
+treat_heterogeneity <- 0   # stdev, determines variation in mean treatment
+assignment_influence <- 1  # set this somewhere between 0 and 1
+cluster_treat_effect <- rep.int(rnorm(n=nr_clusters, mean=0, sd=treat_heterogeneity), 
+                                times=nr_clusters)
+cluster_assign_effect <- rep.int(runif(n=nr_clusters, min=-0.5, max=0.5), 
+                                 times=nr_clusters) * assignment_influence
+
+population <- data.frame(y1 = rnorm(n=pop_size, mean=2, sd=1) + cluster_treat_effect,
+                         y0 = rnorm(n=pop_size, mean=0, sd=1),
+                         w  = rbinom(n=pop_size, size=1, prob=0.5 + cluster_assign_effect),
+                         c  = rep.int(seq.int(1, nr_clusters), times=pop_size/nr_clusters))
+
+sample_by_prob <- function(nr_rows, prob) {
+  chosen <- vector(mode = "logical", length=nr_rows)
+  for (i in 1:nr_rows) {
+    chosen[i] <- sample(c(TRUE, FALSE), size=1, prob=c(prob,1-prob))  
+  }  
+  return(chosen)
+}
+
+chosen_clusters <- seq.int(1, nr_clusters)[sample_by_prob(nr_rows=nr_clusters,
+                                                          prob=PC) == TRUE]
+sampled_clusters <- population[population$c %in% chosen_clusters,]
+final_sample2 <- sampled_clusters[sample_by_prob(nr_rows=nrow(sampled_clusters),
+                                                prob=PU) == TRUE,]
+final_sample2$Treatment <- final_sample2$y1 - final_sample2$y0
+```
+
+Let's look at the sample again
+
+```{r}
+ggplot(data=final_sample2, aes(x=factor(c), y=Treatment)) +
+  geom_jitter(alpha=0.2) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle=90, hjust=1, size=6)) +
+  labs(x="Cluster Index",
+       y="Treatment effect: y(1)-y(0)")
+```
+
+```{r}
+trt_propens_by_cluster2 <- final_sample2 %>% 
+  group_by(c) %>% 
+  summarize(Pr_T = mean(w))
+ggplot(data=trt_propens_by_cluster2, aes(x=factor(c), y=Pr_T)) +
+  geom_col() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle=90, hjust=1, size=6)) +
+  labs(x="Cluster Index",
+       y="Fraction of sampled obs having received treatment")
+```
+
+### Comparing Standard errors
+
+```{r}
+reg_data <- final_sample2
+reg_data$y = ifelse(reg_data$w == 1, reg_data$y1, reg_data$y0)
+# Normal ols w/o fixed effects
+fit1 <- lm(y ~ w, data=reg_data)
+# Normal ols with fixed effects
+fit2 <- felm(y ~ w | c | 0 | 0, data=reg_data)
+# fixed effects with cluster-robust standard errors
+fit3 <- felm(y ~ w | c | 0 | c, data=reg_data)
+# no fixed-effects with cluster-robust standard errors
+fit4 <- felm(y ~ w | 0 | 0 | c, data=reg_data)
+stargazer(fit1, fit2, fit3, fit4, type="text", omit.stat = c("f", "ser"))
+```
+
+Now, obviously there is no treatment heterogeneity in here anymore and thus no correlated omitted variables problem (the cluster assignment is still correlated with treatment assignment, but cluster assignment has no link to the outcome anymore except through the treatment). Also, clustered sampling is no longer an issue, because it also has treatment heterogeneity as a necessary condition. We still have the assignment mechanism vary by cluster. That alone is a sufficient condition to use clustered standard errors if no fixed effects are included, according to @Abadie.2017. So we would use model (4) in this case. 
+
+## Simulating no treatment heterogeneity and no assignment effect.
+
+### Simulating the sample
+
+```{r}
+set.seed(999)
+pop_size <- 10000
+nr_clusters <- 100
+# Parameters determining the sampling
+PC <- 0.8  # Probability that any given cluster will be sampled
+PU <- 0.8  # Probability that any given person in remaining clusters will be sampled
+# Parameters determining treatement heterogeneity and treatment assignment
+treat_heterogeneity <- 0   # stdev, determines variation in mean treatment
+assignment_influence <- 0  # set this somewhere between 0 and 1
+cluster_treat_effect <- rep.int(rnorm(n=nr_clusters, mean=0, sd=treat_heterogeneity), 
+                                times=nr_clusters)
+cluster_assign_effect <- rep.int(runif(n=nr_clusters, min=-0.5, max=0.5), 
+                                 times=nr_clusters) * assignment_influence
+
+population <- data.frame(y1 = rnorm(n=pop_size, mean=2, sd=1) + cluster_treat_effect,
+                         y0 = rnorm(n=pop_size, mean=0, sd=1),
+                         w  = rbinom(n=pop_size, size=1, prob=0.5 + cluster_assign_effect),
+                         c  = rep.int(seq.int(1, nr_clusters), times=pop_size/nr_clusters))
+
+sample_by_prob <- function(nr_rows, prob) {
+  chosen <- vector(mode = "logical", length=nr_rows)
+  for (i in 1:nr_rows) {
+    chosen[i] <- sample(c(TRUE, FALSE), size=1, prob=c(prob,1-prob))  
+  }  
+  return(chosen)
+}
+
+chosen_clusters <- seq.int(1, nr_clusters)[sample_by_prob(nr_rows=nr_clusters,
+                                                          prob=PC) == TRUE]
+sampled_clusters <- population[population$c %in% chosen_clusters,]
+final_sample3 <- sampled_clusters[sample_by_prob(nr_rows=nrow(sampled_clusters),
+                                                prob=PU) == TRUE,]
+final_sample3$Treatment <- final_sample3$y1 - final_sample3$y0
+```
+
+And here the final comparison:
+
+```{r}
+ggplot(data=final_sample3, aes(x=factor(c), y=Treatment)) +
+  geom_jitter(alpha=0.2) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle=90, hjust=1, size=6)) +
+  labs(x="Cluster Index",
+       y="Treatment effect: y(1)-y(0)")
+```
+
+```{r}
+trt_propens_by_cluster3 <- final_sample3 %>% 
+  group_by(c) %>% 
+  summarize(Pr_T = mean(w))
+ggplot(data=trt_propens_by_cluster3, aes(x=factor(c), y=Pr_T)) +
+  geom_col() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle=90, hjust=1, size=6)) +
+  labs(x="Cluster Index",
+       y="Fraction of sampled obs having received treatment")
+```
+
+### Comparing Standard errors
+ 
+```{r}
+reg_data <- final_sample3
+reg_data$y = ifelse(reg_data$w == 1, reg_data$y1, reg_data$y0)
+# Normal ols w/o fixed effects
+fit1 <- lm(y ~ w, data=reg_data)
+# Normal ols with fixed effects
+fit2 <- felm(y ~ w | c | 0 | 0, data=reg_data)
+# fixed effects with cluster-robust standard errors
+fit3 <- felm(y ~ w | c | 0 | c, data=reg_data)
+# no fixed-effects with heterscedasticity-robust standard errors
+rob_fit1 <- coeftest(fit1, vcov=vcovHC(fit1))
+stargazer(fit1, fit2, fit3, rob_fit1, type="text", omit.stat = c("f", "ser"))
+```
+
+Now, we neither have treatment heterogeneity nor cluster assignment heterogeneity (at least no systematical one). Here we would not use fixed-effects and simply use a heteroscedasticity robust estimator, which is model (4) (which comes out to the same thing, because we do not have heteroscedasticity here.)
+
+
+# Not everyone uses standard errors: 
+
+From [Gelman](http://www.statsblogs.com/2017/12/27/a-debate-about-robust-standard-errors-perspective-from-an-outsider/):
+
+>My colleague urged me to look at the debate more carefully, though, so I did. But before getting to that, let me explain where I’m coming from. I won’t be trying to make the “Holy Roman Empire” argument that they’re not robust, not standard, and not an estimate of error. I’ll just say why I haven’t found those methods useful myself, and then I’ll get to the debate.
+
+>The paradigmatic use case goes like this: You’re running a regression to estimate a causal effect. For simplicity suppose you have good identification and also suppose you have enough balance that you can consider your regression coefficient as some reasonably interpretable sort of average treatment effect. Further assume that your sample is representative enough, or treatment interactions are low enough, that you can consider the treatment effect in the sample as a reasonable approximation to the treatment effect in the population of interest.
+
+>But . . . your data are clustered or have widely unequal variances, so the assumption of a model plus independent errors is not appropriate. What you can do is run the regression, get an estimate and standard error, and then use some method of “robust standard errors” to inflate the standard errors so you get confidence intervals with close to nominal coverage.
+
+>That all sounds reasonable. And, indeed, robust standard errors are a popular statistical method. Also, speaking more generally, I’m a big fan of getting accurate uncertainties. See, for example, this paper, where Houshmand Shirani-Mehr, David Rothschild, Sharad Goel, and I argue that reported standard errors in political polls are off by approximately a factor of 2.
+
+>But this example also illustrates why I’m not so interested in robust standard errors: I’d rather model the variation of interest (in this case, the differences between polling averages and actual election outcomes) directly, and get my uncertainties from there.
+
+# Reference

@@ -1,0 +1,193 @@
+---
+title: 'Final Excercise involving Matching Estimators'
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+bibliography: ../Lit/bibliography.bib
+---
+
+*(C) Harm Schuett 2018, schuett@bwl.lmu.de, see LICENSE file for details*
+
+```{r}
+library(ggplot2)  # graphics
+library(dplyr)
+library(MatchIt)  # matching procedures
+grid.arrange <- gridExtra::grid.arrange
+theme_set(theme_minimal())
+```
+
+
+## Reducing Functional Form Dependency by Matching
+
+> The goal of matching is to reduce model dependence (Gary King)
+
+A simple regression is not always the best modelling approach for causal inference. Let's talk about why. A regression is fine, if you have a lot of confidence in your model. If you do not have that you need to be more aware of how much "flexibility" your data allows you. The key problems are **lack of balance** and **lack of overlap**. 
+
+- **Lack of balance (Imbalance)** is a problem because it forces us to rely more on the correctness of our model, which is something we would like to minimize as much as we can.
+
+- **Lack of overlap** simply means that the range of data is not the same for treatment and control group. For the regions where there is no overlap we do not have approximations of the counterfactual and thus need to extrapolate (questions external validity). 
+
+### Lack of balance
+
+From @Gelman.2007, p. 200: suppose the potential outcomes are of the form:
+
+$$y^1_i = b_0 + b_1 x_i + b_2 x_i^2 + \theta + u_i$$
+$$y^0_i = b_0 + b_1 x_i + b_2 x_i^2  + u_i$$
+
+Averaging both equations, solving the second equation for $b_0$ and plugging that result into the first equation yields:
+
+$$\hat{\theta} = \bar{y}_1 - \bar{y}_0 - b_1(\bar{x}_1-\bar{x}_0) - b_2(\bar{x}^2_1 - \bar{x}^2_0)$$
+
+So, if we use a linear regression but do not include a quadratic term, then our estimate of the ATE will be off by $b_2(\bar{x}^2_1 - \bar{x}^2_0)$. That term will be bigger, the more different $\bar{x}$ is between treatment and control group. So lack of balance, in addition to the need to condition on $x$, really is a problem of having to put a lot of faith into your modelspecification.
+
+So, imbalance is a source of model dependence, which leads to research discretion etc. We can also try to visualize this: 
+
+```{r}
+set.seed(666)
+x_0  <- rnorm(n=20, mean=2,   sd=1)
+y_0  <- rnorm(n=20, mean=4,   sd=2)
+x_1b <- rnorm(n=20, mean=2,   sd=1.5)
+y_1b <- rnorm(n=20, mean=4,   sd=1.5) 
+x_1a <- rnorm(n=20, mean=0,   sd=1)
+y_1a <- rnorm(n=20, mean=1,   sd=1) 
+x_1c <- rnorm(n=20, mean=5,   sd=1)
+y_1c <- rnorm(n=20, mean=1,   sd=1) 
+
+imba <- data.frame(y = c(y_0, y_1a, y_1b, y_1c),
+                   x = c(x_0, x_1a, x_1b, x_1c),
+                   treat = factor(c(rep(1, times=20), rep(0, times=60)))
+                   )
+sub_imba <- data.frame(y = c(y_0, y_1b),
+                       x = c(x_0, x_1b),
+                       treat = factor(c(rep(1, times=20), rep(0, times=20)))
+                       )
+
+base_plot <- ggplot(data=imba, aes(x=x, y=y)) +
+  geom_point(aes(color=treat)) +
+  theme(legend.position="bottom")
+
+grid.arrange(base_plot + 
+               geom_smooth(method="lm", aes(color=treat)),
+             base_plot + 
+               geom_smooth(method="lm", formula=y ~ poly(x, 2), aes(color=treat)),
+             ncol=2)
+```
+
+You see, you get quite different and big effect estimates, depending on the functional form. But let's zoom in on the region where we have balance (similar distributions of covariates in the treatment and control units) 
+
+```{r}
+base_plot2 <- ggplot(data=sub_imba, aes(x=x, y=y)) +
+  geom_point(aes(color=treat)) +
+  theme(legend.position="bottom")
+
+grid.arrange(base_plot2 + 
+               geom_smooth(method="lm", aes(color=treat)),
+             base_plot2 + 
+               geom_smooth(method="lm", formula=y ~ poly(x, 2), aes(color=treat)),
+             ncol=2)
+```
+
+You see that here, we don't find much and that result does not change with the functional form. *The balanced data is much more agnostic to the functional form.*
+
+### Lack of overlap
+
+Following @Gelman.2007, p. 184, consider a hypothetical example of a medical treatment that is supposed to make you healthier. But you obviously had a pre-treatment health status. And that pre-treatment health status might determine whether you get the medical treatement or not (assignment mechanism). Now, in that case we might not have treatment observations for people with bad pre-treatment health. Arguably we cannot say anything about the effect of treatment for good health people then (unless we are willing to extrapolate from bad health people)
+
+*Note that imbalance and overlap are different concepts. The first is about differing shapes of the covariate distribution, even if they have the same data range. Overlap only concerns similarity of the data ranges.*
+
+### What is matching?
+
+> *Matching* refers to a variety of procedures that restrict and reorganize the original sample in preparation for statistical analyis [@Gelman.2007, p.206]
+
+Matching - by throwing away observations without matches - tries to select and trim the sample so that we restrict ourselfs to a subset of the data with balance and overlap. The advantage, if done correctly, is that we can be more confident in the unbiasedness and lack of model dependence of our estimates for the subregion of data we matched. The downside is that we are throwing away data, which is inefficient, and we cannot in good confidence say much about the treatment effect outside the matched datarange. 
+
+Let's create an example. This is a simulation of a the effect of military service on wages. There are obvious confounders (some of which we can hopefully measure with the right data) and it is not quite clear what functional form the relation should be. This is a good situation for matching. Think of the people in the sample that went to the military as the *treatment group* (military service: yes/no being the *treatment*) and the others as the control group. This treatment is not random. People *assign* themselves to one of these two groups. The rationale that determines the decision to go to the military is an example of an *assignment mechanism*. The mechanism has an unknown functional form. 
+
+```{r}
+set.seed(666)
+# creating some random data
+n <- 1000
+tb_full_sample <- data.frame(
+  age=sample(c(16:30), size=n, replace=TRUE),
+  schooling=sample(c(8:18), size=n, replace=TRUE),
+  score=sample(c(1:100), size=n, replace=TRUE),
+  u = rnorm(n=n, mean=0, sd=5)
+) %>% 
+  # first the assignment mechanism:
+mutate(military = if_else(age < 24 & schooling < 12 & score > 40, 1, 0),
+       wage0    = 0.9 * age + 1.2 * schooling + 1.2* score + u) %>% 
+    # Now put the treatment effect of military service to something between 0 and 20 with mean 10
+mutate(wage1    = wage0 + runif(n=n, min=0, max=20)) %>% 
+    # for each person. Finally the treatement effect per person
+mutate(TE       = wage1 - wage0,
+       wage     = if_else(military == 1, wage1, wage0))
+
+# actual average treatment effect:
+mean(tb_full_sample$TE)
+```
+
+```{r}
+ggplot(data=tb_full_sample, aes(x=wage, group=military, fill=factor(military))) +
+  geom_histogram(position="dodge", bins=25) +
+  labs(title="Distribution of wages")
+```
+
+What happens if we compare treatment (military service) and no control (no military service) without any adjustments?
+
+```{r}
+avg_treat <- mean(tb_full_sample[tb_full_sample$military == 1, "wage"])
+avg_contr <- mean(tb_full_sample[tb_full_sample$military == 0, "wage"])
+avg_treat - avg_contr
+```
+
+This estimate is obviously confounded. Only certain people are admitted into the military.
+
+What happens if we match?
+
+```{r}
+mod_match <- matchit(military ~ age + schooling + score,  
+                     data=tb_full_sample, method="nearest", distance="mahalanobis")
+summary(mod_match)
+```
+
+Let's take the matched data:
+
+```{r}
+tb_matched <- match.data(mod_match)
+ggplot(data=tb_matched, aes(x=wage, group=military, fill=factor(military))) +
+  geom_histogram(position="dodge", bins=25) +
+  labs(title="Distribution of wages")
+```
+
+```{r}
+avg_treat2 <- mean(tb_matched[tb_matched$military == 1, "wage"])
+avg_contr2 <- mean(tb_matched[tb_matched$military == 0, "wage"])
+avg_treat2 - avg_contr2
+```
+
+```{r}
+summary(lm(wage ~ military, data=tb_matched))
+```
+
+As you can see, much better. though not perfect. We have quite a bit of noise in the u term, which makes this a noisy estimator. We can still improve though:
+
+### Standard errors when matching
+
+A word of caution: 
+ 
+>If one chooses options that allow matching with replacement, or any solution that has different numbers of controls (or treateds) within each subclass or strata (such as full matching), then the parametric analysis following matching must accomodate these procedures, such as by using fixed effects or weights, as appropriate. [MathIt Documentation](https://r.iq.harvard.edu/docs/matchit/2.4-15/Conducting_Analyses_af.html)
+
+Translation: If you do not do one-to-one matching, but one-to-many (which you sometimes want to do to not throw away too many observations) and especially with replacement, you must do some additional steps after matching.
+
+In additon, the standard errors of matched data are not technically correct. First, Matching obviously induces correlation among matched observations. We can largely account for this by including the variables by which you matched into the regression. But, a largely unresolved problem is the uncertainty included in the proensity score or similar approaches is not reflected in the standard errors. The safest way seems to be one-to-one nearest neighbour matching rather than approaches like propensity score matching.
+
+```{r}
+summary(lm(wage ~ military + age + schooling + score, data=tb_matched))
+```
+
+## Group excercise
+
+1. Load the final compustate file. Using the data, try to answer the question: What is the relation between low effective tax rates and future business growth? Apply all the things we talked about in this course.
+
+## References
