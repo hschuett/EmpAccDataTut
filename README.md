@@ -22,10 +22,10 @@ This material is intended to be simple, introductory teaching material for maste
 
 We will use quite a few different R packages in the tutorial sessions. To install the necessary packages run the following command from inside RStudio's console:
 
-    install.packages("tidyverse, "RPostgres", "lubridate", "gtrendsR",
-                    "quantmod", "kableExtra", "broom", "lfe", "MatchIt",
-                    "igraph" "stargazer", "MASS", "sandwich", "lmtest",
-                    "gridExtra", "haven")
+    install.packages(c("tidyverse", "RPostgres", "lubridate", "gtrendsR",
+                       "quantmod", "kableExtra", "broom", "lfe", "MatchIt",
+                       "igraph", "stargazer", "MASS", "sandwich", "lmtest",
+                       "gridExtra", "haven"))
 
 see below:
 
